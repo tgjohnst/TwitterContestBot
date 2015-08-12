@@ -370,7 +370,7 @@ class TwitterBot:
 				
 	def filter_out_tweets_containing(self,searched_tweets,exclude_list):
 		"""
-			Filters out tweets containing certain phrases from a 
+			Filters out tweets containing certain phrases from a list
 		"""
 		origLen = len(searched_tweets)
 		for phrase in exclude_list:
@@ -379,6 +379,17 @@ class TwitterBot:
 			if numRemoved > 0:
 				print("  Removed %d tweets with the phrase %s in them" % (numRemoved, phrase))
 				origLen = len(searched_tweets)
+		return searched_tweets
+		
+	def filter_out_tweets_with_prefix(self,searched_tweets,prefix):
+		"""
+			Filters out tweets that start with a certain prefix
+		"""
+		origLen = len(searched_tweets)
+		searched_tweets = [tweet for tweet in searched_tweets if not (tweet["text"].startswith(prefix))]
+		numRemoved = origLen - len(searched_tweets)
+		if numRemoved > 0:
+			print("  Removed %d tweets that begun with %s" % (numRemoved, prefix))
 		return searched_tweets
 		
 	def filter_only_tweets_containing(self,searched_tweets,include_list):

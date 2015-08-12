@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 
 """
-Copyright 2015 Randal S. Olson
+This is a heavily modified version of TwitterFollowBot
+Original version - Copyright 2015 Randal S. Olson
 
 This file is part of the Twitter Bot library.
 
@@ -23,7 +24,7 @@ import os
 import sys
 import time
 import random
-
+import json
 
 class TwitterBot:
 
@@ -65,6 +66,24 @@ class TwitterBot:
 			time.sleep(wait_time)
 
 		return wait_time
+		
+	def get_follows_list_from_disk(self):
+		"""
+			Returns the set of users that the user is currently following, from disk cache.
+		"""
+		follows_list = []
+		with open(self.BOT_CONFIG["FOLLOWS_FILE"], "r") as in_file:
+			for line in in_file:
+				follows_list.append(int(line))
+		return follows_list
+	
+	def get_seen_tweets_list_from_disk(self):
+		"""
+			Returns the set of users that the user is currently following, from disk cache.
+		"""
+		with open(self.BOT_CONFIG["SEEN_TWEETS_FILE"], "r") as in_file:
+			seen_tweets_dict = json.load(in_file)
+		return seen_tweets_dict
 
 	def bot_setup(self, config_file="config.txt"):
 		"""
@@ -112,7 +131,7 @@ class TwitterBot:
 		# make sure all of the sync files exist locally
 		for sync_file in [self.BOT_CONFIG["ALREADY_FOLLOWED_FILE"],
 						  self.BOT_CONFIG["FOLLOWS_FILE"],
-						  self.BOT_CONFIG["SEEN_TWEETS_FILE"]:
+						  self.BOT_CONFIG["SEEN_TWEETS_FILE"]]:
 			if not os.path.isfile(sync_file):
 				with open(sync_file, "w") as out_file:
 					out_file.write("")
@@ -124,10 +143,9 @@ class TwitterBot:
 				  "It is highly recommended that you sync them by calling sync_follows() "
 				  "before continuing.", file=sys.stderr)
 				  
-		# Read followers file from disk and store in the bot, then check sync remotely
-		self.follows = get_follows_list_from_disk()
-		sync_remote_follows()
-		self.seen_tweets = get_seen_tweets_list_from_disk()
+		# Read followers file from disk and store in the bot
+		self.follows = self.get_follows_list_from_disk()
+		self.seen_tweets = self.get_seen_tweets_list_from_disk()
 
 		# create an authorized connection to the Twitter API
 		self.TWITTER_CONNECTION = Twitter(auth=OAuth(self.BOT_CONFIG["OAUTH_TOKEN"],
@@ -139,13 +157,11 @@ class TwitterBot:
 		"""
 			Syncs the user's follows locally so it isn't necessary
 			to repeatedly look them up via the Twitter API. This will also remove mistaken
-			local follows, and add local follows marked remotely.
+			local follows, and add local follows marked remotely, while attempting to
+			maintain the order of the local cache.
 
-			Do not run this method too often, however, or it will quickly cause your
+			Do not run this method too often, or it will quickly cause your
 			bot to get rate limited by the Twitter API.
-			
-			Note that this is a last-ditch method and should be run only when the app-
-			maintained list is unreliable. 
 		"""
 		print("Syncing remote follows with local cache...", file=sys.stdout)
 		# sync the user's follows (accounts the user is following)
@@ -158,11 +174,12 @@ class TwitterBot:
 																   cursor=next_cursor)
 			newFollows = newFollows | set(following_status["ids"])
 			next_cursor = following_status["next_cursor"]
-		
+		removedFollows = [x for x in self.follows if x not in newFollows]
 		self.follows = [x for x in self.follows if x in newFollows]
+		print("Found %d local follows not in remote set and removed them" % (len(removedFollows)), file=sys.stdout)
 		toAdd = [x for x in newFollows if x not in set(self.follows)]
 		self.follows = self.follows + toAdd
-		print("Found %d remote follows not in local cache and added them" % (str(len(toAdd))), file=sys.stdout)
+		print("Found %d remote follows not in local cache and added them" % (len(toAdd)), file=sys.stdout)
 
 	def sync_follows_to_disk(self):
 		"""
@@ -178,11 +195,9 @@ class TwitterBot:
 		"""
 			Syncs the user's seen tweets to disk. 
 		"""
-
 		# sync the user's seen tweet IDs to disk
 		with open(self.BOT_CONFIG["SEEN_TWEETS_FILE"], "w") as out_file:
-			for seen_tweet in self.seen_tweets:
-				out_file.write("%s\n" % (seen_tweet))
+			json.dump(self.seen_tweets, out_file, indent=2)
 
 	def get_do_not_follow_list(self):
 		"""
@@ -193,28 +208,6 @@ class TwitterBot:
 			for line in in_file:
 				dnf_list.append(int(line))
 		return set(dnf_list)
-
-
-	def get_follows_list_from_disk(self):
-		"""
-			Returns the set of users that the user is currently following, from disk cache.
-		"""
-		follows_list = []
-		with open(self.BOT_CONFIG["FOLLOWS_FILE"], "r") as in_file:
-			for line in in_file:
-				follows_list.append(int(line))
-		return follows_list
-	
-	def get_seen_tweets_list_from_disk(self):
-		"""
-			Returns the set of users that the user is currently following, from disk cache.
-		"""
-		seen_tweets_list = []
-		with open(self.BOT_CONFIG["SEEN_TWEETS_FILE"], "r") as in_file:
-			for line in in_file:
-				seen_tweets_list.append(int(line))
-		return seen_tweets_list
-
 	
 	def get_follows_list(self):
 		"""
@@ -224,66 +217,69 @@ class TwitterBot:
 		
 	def get_seen_tweets_list(self):
 		"""
-			Returns the set of users that the user is currently following.
+			Returns the dictionary of the most recently dealt with tweet for each search
 		"""
 		return self.seen_tweets
+		
+	def add_local_follower(self, id):
+		"""
+			Returns the dictionary of the most recently dealt with tweet for each search
+		"""
+		self.follows.append(id)
+		
+	def get_last_id(self, term):
+		"""
+			Returns just the last seen tweet ID for a given search
+		"""
+		return self.seen_tweets.get(term, 0)
+		
+	def set_last_id(self, term, id):
+		"""
+			Sets the last seen tweet for a given search term to the specified ID
+		"""
+		self.seen_tweets[term] = id
 
-	def search_tweets(self, phrase, count=100, result_type="recent"):
+	def search_tweets(self, phrase, count=100, result_type="recent", since=0):
 		"""
 			Returns a list of tweets matching a phrase (hashtag, word, etc.).
 		"""
-
-		return self.TWITTER_CONNECTION.search.tweets(q=phrase, result_type=result_type, count=count)
+		toRet = self.TWITTER_CONNECTION.search.tweets(q=phrase, result_type=result_type, count=count, since_id=since)
+		return toRet["statuses"]
+		
+	def search_tweets_with_metadata(self, phrase, count=100, result_type="recent", since=0):
+		"""
+			Returns a list of tweets matching a phrase (hashtag, word, etc.).
+		"""
+		return self.TWITTER_CONNECTION.search.tweets(q=phrase, result_type=result_type, count=count, since_id=since)
 
 	def unfollow_user(self,user_id):
 		"""
 			Unfollows a specific person, denoted by their user ID
 		"""
-			self.wait_on_action()
-			self.TWITTER_CONNECTION.friendships.destroy(user_id=user_id)
-			print("Unfollowed %d" % (user_id), file=sys.stdout)
-			
-	def auto_fav_phrase(self, phrase, count = 100, result_type="recent"):
-		searched_tweets = self.search_tweets(phrase, count, result_type)
-		self.auto_fav(searched_tweets)
-
-	def auto_rt_phrase(self, phrase, count = 100, result_type="recent"):
-		searched_tweets = self.search_tweets(phrase, count, result_type)
-		self.auto_rt(searched_tweets)
-
-	def auto_follow_from_phrase(self, phrase, count = 100, result_type="recent"):
-		searched_tweets = self.search_tweets(phrase, count, result_type)
-		self.auto_follow(searched_tweets)
-
-	def auto_fav_phrase_then_follow(self, phrase, count=100, result_type="recent"):
+		self.wait_on_action()
+		self.TWITTER_CONNECTION.friendships.destroy(user_id=user_id)
+		print("Unfollowed %d" % (user_id))
+		
+	def unfollow_first_n_users(self,num_users):
 		"""
-			Follows anyone who tweets about a phrase (hashtag, word, etc.) after you favorite that tweet
+			Unfollows a specific person, denoted by their user ID
 		"""
-		searched_tweets = self.search_tweets(phrase, count, result_type)
-		self.auto_fav(searched_tweets)
-		self.auto_follow(searched_tweets)
-
-	def auto_rt_phrase_then_follow(self, phrase, count=100, result_type="recent"):
-		"""
-			Follows anyone who tweets about a phrase (hashtag, word, etc.) after you rt that tweet
-		"""
-		searched_tweets = self.search_tweets(phrase, count, result_type)
-		self.auto_rt(searched_tweets)
-		self.auto_follow(searched_tweets)
+		for i in range(num_users):
+			self.unfollow_user(self.follows.pop(0)) # would be more efficient to use a queue...
 
 	def auto_fav(self, searched_tweets):
 		"""
 			Favorites every tweet in a tweet search list
 		"""
 
-		for tweet in searched_tweets["statuses"]:
+		for tweet in searched_tweets:
 			try:
 				# don't favorite your own tweets
 				if tweet["user"]["screen_name"] == self.BOT_CONFIG["TWITTER_HANDLE"]:
 					continue
-
+				time.sleep(1) # Wait a second between favorites!
 				searched_tweet = self.TWITTER_CONNECTION.favorites.create(_id=tweet["id"])
-				print("Favorited: %s" % (searched_tweet["text"].encode("utf-8")), file=sys.stdout)
+				print("  Favorited: %s" % (searched_tweet["text"].encode("utf-8")))
 
 			# when you have already favorited a tweet, this error is thrown
 			except TwitterHTTPError as api_error:
@@ -296,32 +292,19 @@ class TwitterBot:
 				if "you have already favorited this status" not in str(api_error).lower():
 					print("Error: %s" % (str(api_error)), file=sys.stderr)
 					
-	def mark_tweets_seen(self, searched_tweets):
-		"""
-			Marks all tweets in a list as having been dealt with
-		"""
-		for tweet in searched_tweets["statuses"]:
-			try:
-				# don't favorite your own tweets
-				if tweet["user"]["screen_name"] == self.BOT_CONFIG["TWITTER_HANDLE"]:
-					continue
-
-				searched_tweet = self.TWITTER_CONNECTION.favorites.create(_id=tweet["id"])
-				print("Favorited: %s" % (searched_tweet["text"].encode("utf-8")), file=sys.stdout)
-
 	def auto_rt(self, searched_tweets):
 		"""
 			Retweets every tweet in a tweet search list
 		"""
 
-		for tweet in searched_tweets["statuses"]:
+		for tweet in searched_tweets:
 			try:
 				# don't retweet your own tweets
 				if tweet["user"]["screen_name"] == self.BOT_CONFIG["TWITTER_HANDLE"]:
 					continue
-
+				time.sleep(1) # Wait a second between retweets!
 				searched_tweet = self.TWITTER_CONNECTION.statuses.retweet(id=tweet["id"])
-				print("Retweeted: %s" % (searched_tweet["text"].encode("utf-8")), file=sys.stdout)
+				print("Retweeted: %s" % (searched_tweet["text"].encode("utf-8")))
 
 			# when you have already retweeted a tweet, this error is thrown
 			except TwitterHTTPError as api_error:
@@ -340,7 +323,7 @@ class TwitterBot:
 		following = self.get_follows_list()
 		do_not_follow = self.get_do_not_follow_list()
 
-		for tweet in searched_tweets["statuses"]:
+		for tweet in searched_tweets:
 			try:
 				if (tweet["user"]["screen_name"] != self.BOT_CONFIG["TWITTER_HANDLE"] and
 						tweet["user"]["id"] not in following and
@@ -349,10 +332,10 @@ class TwitterBot:
 					self.wait_on_action()
 
 					self.TWITTER_CONNECTION.friendships.create(user_id=tweet["user"]["id"], follow=False)
-					following.update(set([tweet["user"]["id"]]))
+					self.add_local_follower(tweet["user"]["id"])
 
-					print("Followed %s" %
-						  (tweet["user"]["screen_name"]), file=sys.stdout)
+					print("  Followed %s" %
+						  (tweet["user"]["screen_name"]))
 
 			except TwitterHTTPError as api_error:
 				# quit on rate limit errors
@@ -380,7 +363,7 @@ class TwitterBot:
 				self.wait_on_action()
 
 				self.TWITTER_CONNECTION.friendships.destroy(user_id=user_id)
-				print("Unfollowed %d" % (user_id), file=sys.stdout)
+				print("Unfollowed %d" % (user_id))
 
 	def send_tweet(self, message):
 		"""

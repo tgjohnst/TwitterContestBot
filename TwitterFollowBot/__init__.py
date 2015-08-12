@@ -190,6 +190,9 @@ class TwitterBot:
 		with open(self.BOT_CONFIG["FOLLOWS_FILE"], "w") as out_file:
 			for follow in self.follows:
 				out_file.write("%s\n" % (follow))
+		with open(self.BOT_CONFIG["ALREADY_FOLLOWED_FILE"], "a") as out_file:
+			for follow in self.follows:
+				out_file.write("%s\n" % (follow))
 				
 	def sync_seen_tweets_to_disk(self):
 		"""
@@ -375,6 +378,19 @@ class TwitterBot:
 			numRemoved = origLen - len(searched_tweets)
 			if numRemoved > 0:
 				print("  Removed %d tweets with the phrase %s in them" % (numRemoved, phrase))
+				origLen = len(searched_tweets)
+		return searched_tweets
+		
+	def filter_only_tweets_containing(self,searched_tweets,include_list):
+		"""
+			Filters out tweets containing certain phrases from a 
+		"""
+		origLen = len(searched_tweets)
+		for phrase in include_list:
+			searched_tweets = [tweet for tweet in searched_tweets if (phrase in tweet["text"])]
+			numRetained = len(searched_tweets)
+			if numRetained > 0:
+				print("Retained %d out of %d tweets with the phrase %s in them" % (numRetained,origLen,phrase))
 				origLen = len(searched_tweets)
 		return searched_tweets
 

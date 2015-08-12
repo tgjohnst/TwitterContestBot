@@ -94,8 +94,7 @@ class TwitterBot:
         # make sure that the config file specifies all required parameters
         required_parameters = ["OAUTH_TOKEN", "OAUTH_SECRET", "CONSUMER_KEY",
                                "CONSUMER_SECRET", "TWITTER_HANDLE",
-                               "ALREADY_FOLLOWED_FILE",
-                               "FOLLOWERS_FILE", "FOLLOWS_FILE"]
+                               "ALREADY_FOLLOWED_FILE","FOLLOWS_FILE"]
 
         missing_parameters = []
 
@@ -112,8 +111,7 @@ class TwitterBot:
 
         # make sure all of the sync files exist locally
         for sync_file in [self.BOT_CONFIG["ALREADY_FOLLOWED_FILE"],
-                          self.BOT_CONFIG["FOLLOWS_FILE"],
-                          self.BOT_CONFIG["FOLLOWERS_FILE"]]:
+                          self.BOT_CONFIG["FOLLOWS_FILE"]]:
             if not os.path.isfile(sync_file):
                 with open(sync_file, "w") as out_file:
                     out_file.write("")
@@ -125,6 +123,9 @@ class TwitterBot:
             print("Warning: Your Twitter follower sync files are more than a day old. "
                   "It is highly recommended that you sync them by calling sync_follows() "
                   "before continuing.", file=sys.stderr)
+                  
+        # Read followers file from disk and store in the bot
+        self.follows = get_follows_list_from_disk()
 
         # create an authorized connection to the Twitter API
         self.TWITTER_CONNECTION = Twitter(auth=OAuth(self.BOT_CONFIG["OAUTH_TOKEN"],
@@ -132,55 +133,45 @@ class TwitterBot:
                                                      self.BOT_CONFIG["CONSUMER_KEY"],
                                                      self.BOT_CONFIG["CONSUMER_SECRET"]))
 
-    def sync_follows(self):
+    def sync_follows_to_disk(self):
+        """
+            Syncs the user's followers to disk. 
+        """
+
+        # sync the user's follows (accounts the user is following) to disk
+        with open(self.BOT_CONFIG["FOLLOWS_FILE"], "w") as out_file:
+            for follow in self.follows:
+                out_file.write("%s\n" % (follow))
+                             
+                    
+    def sync_remote_follows(self):
         """
             Syncs the user's followers and follows locally so it isn't necessary
-            to repeatedly look them up via the Twitter API.
-
-            It is important to run this method at least daily so the bot is working
-            with a relatively up-to-date version of the user's follows.
+            to repeatedly look them up via the Twitter API. This will also remove mistaken
+            local follows, and add local follows marked remotely.
 
             Do not run this method too often, however, or it will quickly cause your
             bot to get rate limited by the Twitter API.
+            
+            Note that this is a last-ditch method and should be run only when the app-
+            maintained list is unreliable. 
         """
-
-        # sync the user's followers (accounts following the user)
-        followers_status = self.TWITTER_CONNECTION.followers.ids(screen_name=self.BOT_CONFIG["TWITTER_HANDLE"])
-        followers = set(followers_status["ids"])
-        next_cursor = followers_status["next_cursor"]
-
-        with open(self.BOT_CONFIG["FOLLOWERS_FILE"], "w") as out_file:
-            for follower in followers:
-                out_file.write("%s\n" % (follower))
-
-        while next_cursor != 0:
-            followers_status = self.TWITTER_CONNECTION.followers.ids(screen_name=self.BOT_CONFIG["TWITTER_HANDLE"],
-                                                                     cursor=next_cursor)
-            followers = set(followers_status["ids"])
-            next_cursor = followers_status["next_cursor"]
-
-            with open(self.BOT_CONFIG["FOLLOWERS_FILE"], "a") as out_file:
-                for follower in followers:
-                    out_file.write("%s\n" % (follower))
-
+		print("Syncing remote follows with local cache...", file=sys.stdout)
         # sync the user's follows (accounts the user is following)
         following_status = self.TWITTER_CONNECTION.friends.ids(screen_name=self.BOT_CONFIG["TWITTER_HANDLE"])
-        following = set(following_status["ids"])
+		newFollows = set(following_status["ids"])
         next_cursor = following_status["next_cursor"]
-
-        with open(self.BOT_CONFIG["FOLLOWS_FILE"], "w") as out_file:
-            for follow in following:
-                out_file.write("%s\n" % (follow))
-
+		
         while next_cursor != 0:
             following_status = self.TWITTER_CONNECTION.friends.ids(screen_name=self.BOT_CONFIG["TWITTER_HANDLE"],
                                                                    cursor=next_cursor)
-            following = set(following_status["ids"])
+            newFollows = newFollows | set(following_status["ids"])
             next_cursor = following_status["next_cursor"]
-
-            with open(self.BOT_CONFIG["FOLLOWS_FILE"], "a") as out_file:
-                for follow in following:
-                    out_file.write("%s\n" % (follow))
+		
+		self.follows = [x for x in self.follows if x in newFollows]
+		toAdd = [x for x in newFollows if x not in set(selfFollows)]
+		self.follows.append(toAdd)
+		
 
     def get_do_not_follow_list(self):
         """
@@ -194,31 +185,23 @@ class TwitterBot:
 
         return set(dnf_list)
 
-    def get_followers_list(self):
-        """
-            Returns the set of users that are currently following the user.
-        """
 
-        followers_list = []
-        with open(self.BOT_CONFIG["FOLLOWERS_FILE"], "r") as in_file:
-            for line in in_file:
-                followers_list.append(int(line))
-
-        return set(followers_list)
-
-    def get_follows_list(self):
+    def get_follows_list_from_disk(self):
         """
-            Returns the set of users that the user is currently following.
+            Returns the set of users that the user is currently following, from disk cache.
         """
-
         follows_list = []
         with open(self.BOT_CONFIG["FOLLOWS_FILE"], "r") as in_file:
             for line in in_file:
                 follows_list.append(int(line))
-
-        return set(follows_list)
-
-
+        return follows_list
+    
+    
+    def get_follows_list(self):
+        """
+            Returns the set of users that the user is currently following.
+        """
+        return self.follows
 
 
     def search_tweets(self, phrase, count=100, result_type="recent"):
@@ -344,101 +327,7 @@ class TwitterBot:
                     print("Error: %s" % (str(api_error)), file=sys.stderr)
 
 
-
-
-    def auto_follow_followers(self,count=None):
-        """
-            Follows back everyone who's followed you.
-        """
-
-        following = self.get_follows_list()
-        followers = self.get_followers_list()
-
-        not_following_back = followers - following
-        not_following_back = list(not_following_back)[:count]
-        for user_id in not_following_back:
-            try:
-                self.wait_on_action()
-
-                self.TWITTER_CONNECTION.friendships.create(user_id=user_id, follow=False)
-            except TwitterHTTPError as api_error:
-                # quit on rate limit errors
-                if "unable to follow more people at this time" in str(api_error).lower():
-                    print("You are unable to follow more people at this time. "
-                          "Wait a while before running the bot again or gain "
-                          "more followers.", file=sys.stderr)
-                    return
-
-                # don't print "already requested to follow" errors - they're frequent
-                if "already requested to follow" not in str(api_error).lower():
-                    print("Error: %s" % (str(api_error)), file=sys.stderr)
-
-
-
-    def auto_follow_followers_of_user(self, user_twitter_handle, count=100):
-        """
-            Follows the followers of a specified user.
-        """
-
-        following = self.get_follows_list()
-        followers_of_user = set(self.TWITTER_CONNECTION.followers.ids(screen_name=user_twitter_handle)["ids"][:count])
-        do_not_follow = self.get_do_not_follow_list()
-
-        for user_id in followers_of_user:
-            try:
-                if (user_id not in following and
-                        user_id not in do_not_follow):
-
-                    self.wait_on_action()
-
-                    self.TWITTER_CONNECTION.friendships.create(user_id=user_id, follow=False)
-                    print("Followed %s" % user_id, file=sys.stdout)
-
-            except TwitterHTTPError as api_error:
-                # quit on rate limit errors
-                if "unable to follow more people at this time" in str(api_error).lower():
-                    print("You are unable to follow more people at this time. "
-                          "Wait a while before running the bot again or gain "
-                          "more followers.", file=sys.stderr)
-                    return
-
-                # don't print "already requested to follow" errors - they're
-                # frequent
-                if "already requested to follow" not in str(api_error).lower():
-                    print("Error: %s" % (str(api_error)), file=sys.stderr)
-
-    def auto_unfollow_nonfollowers(self,count=None):
-        """
-            Unfollows everyone who hasn't followed you back.
-        """
-
-        following = self.get_follows_list()
-        followers = self.get_followers_list()
-
-        not_following_back = following - followers
-        not_following_back = list(not_following_back)[:count]
-        # update the "already followed" file with users who didn't follow back
-        already_followed = set(not_following_back)
-        already_followed_list = []
-        with open(self.BOT_CONFIG["ALREADY_FOLLOWED_FILE"], "r") as in_file:
-            for line in in_file:
-                already_followed_list.append(int(line))
-
-        already_followed.update(set(already_followed_list))
-
-        with open(self.BOT_CONFIG["ALREADY_FOLLOWED_FILE"], "w") as out_file:
-            for val in already_followed:
-                out_file.write(str(val) + "\n")
-
-        for user_id in not_following_back:
-            if user_id not in self.BOT_CONFIG["USERS_KEEP_FOLLOWING"]:
-
-                self.wait_on_action()
-
-                self.TWITTER_CONNECTION.friendships.destroy(user_id=user_id)
-                print("Unfollowed %d" % (user_id), file=sys.stdout)
-
-    def auto_unfollow_all_followers(self,count=None):
+    def auto_unfollow_all_following(self,count=None):
         """
             Unfollows everyone that you are following(except those who you have specified not to)
         """
@@ -485,3 +374,15 @@ class TwitterBot:
         """
 
         return self.TWITTER_CONNECTION.statuses.update(status=message)
+        
+	def unfollow_user(self,user_id):
+		"""
+			Unfollows a specific person, denoted by their user ID
+		"""
+		if user_id not in self.BOT_CONFIG["USERS_KEEP_FOLLOWING"]:
+			self.wait_on_action()
+			self.TWITTER_CONNECTION.friendships.destroy(user_id=user_id)
+			print("Unfollowed %d" % (user_id), file=sys.stdout)
+		else
+			print("Tried to unfollow %d but they are on the always-follow list" % (user_id), file=sys.stdout)
+		

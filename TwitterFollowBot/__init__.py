@@ -62,7 +62,7 @@ class TwitterBot:
 		wait_time = random.randint(min_time, max_time)
 
 		if wait_time > 0:
-			print("Choosing time between %d and %d - waiting %d seconds before action" % (min_time, max_time, wait_time))
+			print("  Choosing time between %d and %d - waiting %d seconds before action" % (min_time, max_time, wait_time))
 			time.sleep(wait_time)
 
 		return wait_time
@@ -364,6 +364,19 @@ class TwitterBot:
 
 				self.TWITTER_CONNECTION.friendships.destroy(user_id=user_id)
 				print("Unfollowed %d" % (user_id))
+				
+	def filter_out_tweets_containing(self,searched_tweets,exclude_list):
+		"""
+			Filters out tweets containing certain phrases from a 
+		"""
+		origLen = len(searched_tweets)
+		for phrase in exclude_list:
+			searched_tweets = [tweet for tweet in searched_tweets if not (phrase in tweet["text"])]
+			numRemoved = origLen - len(searched_tweets)
+			if numRemoved > 0:
+				print("Removed %d tweets with the phrase %s in them" % (numRemoved, phrase))
+				origLen = len(searched_tweets)
+		return searched_tweets
 
 	def send_tweet(self, message):
 		"""

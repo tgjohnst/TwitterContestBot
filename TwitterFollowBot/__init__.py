@@ -258,7 +258,7 @@ class TwitterBot:
 		"""
 		self.wait_on_action()
 		self.TWITTER_CONNECTION.friendships.destroy(user_id=user_id)
-		print("Unfollowed %d" % (user_id))
+		print("  Unfollowed %d" % (user_id))
 		
 	def unfollow_first_n_users(self,num_users):
 		"""
@@ -374,7 +374,7 @@ class TwitterBot:
 			searched_tweets = [tweet for tweet in searched_tweets if not (phrase in tweet["text"])]
 			numRemoved = origLen - len(searched_tweets)
 			if numRemoved > 0:
-				print("Removed %d tweets with the phrase %s in them" % (numRemoved, phrase))
+				print("  Removed %d tweets with the phrase %s in them" % (numRemoved, phrase))
 				origLen = len(searched_tweets)
 		return searched_tweets
 

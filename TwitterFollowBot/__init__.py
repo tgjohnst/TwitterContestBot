@@ -76,6 +76,16 @@ class TwitterBot:
 			for line in in_file:
 				follows_list.append(int(line))
 		return follows_list
+		
+	def get_last_sync_from_disk(self):
+		"""
+			Returns the last sync time, in unix seconds, from disk cache.
+		"""
+		lastSync = 0
+		with open(self.BOT_CONFIG["LAST_SYNC_FILE"], "r") as in_file:
+			for line in in_file:
+				lastSync = int(line)		
+		return lastSync
 	
 	def get_seen_tweets_list_from_disk(self):
 		"""
@@ -113,7 +123,8 @@ class TwitterBot:
 		# make sure that the config file specifies all required parameters
 		required_parameters = ["OAUTH_TOKEN", "OAUTH_SECRET", "CONSUMER_KEY",
 							   "CONSUMER_SECRET", "TWITTER_HANDLE",
-							   "ALREADY_FOLLOWED_FILE","FOLLOWS_FILE", "SEEN_TWEETS_FILE"]
+							   "ALREADY_FOLLOWED_FILE","FOLLOWS_FILE", "SEEN_TWEETS_FILE",
+							   "LAST_SYNC_FILE","LOGGED_TWEETS_FILE"]
 
 		missing_parameters = []
 
@@ -131,7 +142,9 @@ class TwitterBot:
 		# make sure all of the sync files exist locally
 		for sync_file in [self.BOT_CONFIG["ALREADY_FOLLOWED_FILE"],
 						  self.BOT_CONFIG["FOLLOWS_FILE"],
-						  self.BOT_CONFIG["SEEN_TWEETS_FILE"]]:
+						  self.BOT_CONFIG["SEEN_TWEETS_FILE"],
+						  self.BOT_CONFIG["LAST_SYNC_FILE"],
+						  self.BOT_CONFIG["LOGGED_TWEETS_FILE"]]:
 			if not os.path.isfile(sync_file):
 				with open(sync_file, "w") as out_file:
 					out_file.write("")
@@ -146,6 +159,7 @@ class TwitterBot:
 		# Read followers file from disk and store in the bot
 		self.follows = self.get_follows_list_from_disk()
 		self.seen_tweets = self.get_seen_tweets_list_from_disk()
+		self.last_sync = self.get_last_sync_from_disk()
 
 		# create an authorized connection to the Twitter API
 		self.TWITTER_CONNECTION = Twitter(auth=OAuth(self.BOT_CONFIG["OAUTH_TOKEN"],
@@ -180,6 +194,7 @@ class TwitterBot:
 		toAdd = [x for x in newFollows if x not in set(self.follows)]
 		self.follows = self.follows + toAdd
 		print("Found %d remote follows not in local cache and added them" % (len(toAdd)), file=sys.stdout)
+		self.set_last_sync(int(time.time()))
 
 	def sync_follows_to_disk(self):
 		"""
@@ -241,6 +256,18 @@ class TwitterBot:
 			Sets the last seen tweet for a given search term to the specified ID
 		"""
 		self.seen_tweets[term] = id
+	
+	def get_last_sync(self):
+		"""
+			Sets the last sync time
+		"""
+		return self.last_sync
+		
+	def set_last_sync(self, syncTime):
+		"""
+			Sets the last sync time
+		"""
+		self.last_sync = syncTime
 
 	def search_tweets(self, phrase, count=100, result_type="recent", since=0):
 		"""
@@ -292,6 +319,10 @@ class TwitterBot:
 						  "Wait a while before running the bot again.", file=sys.stderr)
 					return
 
+				if "over capacity" in str(api_error).lower():
+					print("Error: API is over capacity. Giving it some time to rest.")
+					self.wait_on_action()
+					
 				if "you have already favorited this status" not in str(api_error).lower():
 					print("Error: %s" % (str(api_error)), file=sys.stderr)
 					
@@ -307,7 +338,7 @@ class TwitterBot:
 					continue
 				time.sleep(1) # Wait a second between retweets!
 				searched_tweet = self.TWITTER_CONNECTION.statuses.retweet(id=tweet["id"])
-				print("Retweeted: %s" % (searched_tweet["text"].encode("utf-8")))
+				print("  Retweeted: %s" % (searched_tweet["text"].encode("utf-8")))
 
 			# when you have already retweeted a tweet, this error is thrown
 			except TwitterHTTPError as api_error:
@@ -316,6 +347,10 @@ class TwitterBot:
 					print("You have been rate limited. "
 						  "Wait a while before running the bot again.", file=sys.stderr)
 					return
+				
+				if "over capacity" in str(api_error).lower():
+					print("Error: API is over capacity. Giving it some time to rest.")
+					self.wait_on_action()
 
 				print("Error: %s" % (str(api_error)), file=sys.stderr)
 
@@ -348,6 +383,10 @@ class TwitterBot:
 						  "more followers.", file=sys.stderr)
 					return
 
+				if "over capacity" in str(api_error).lower():
+					print("Error: API is over capacity. Giving it some time to rest.")
+					self.wait_on_action()
+					
 				# don't print "already requested to follow" errors - they're
 				# frequent
 				if "already requested to follow" not in str(api_error).lower():
@@ -374,6 +413,9 @@ class TwitterBot:
 		"""
 		origLen = len(searched_tweets)
 		for phrase in exclude_list:
+			exclude_tweets = [tweet for tweet in searched_tweets if (phrase in tweet["text"])]
+			if len(exclude_tweets) > 0:
+				self.write_tweets_to_tweet_file(exclude_tweets)
 			searched_tweets = [tweet for tweet in searched_tweets if not (phrase in tweet["text"])]
 			numRemoved = origLen - len(searched_tweets)
 			if numRemoved > 0:
@@ -404,6 +446,14 @@ class TwitterBot:
 				print("Retained %d out of %d tweets with the phrase %s in them" % (numRetained,origLen,phrase))
 				origLen = len(searched_tweets)
 		return searched_tweets
+	
+	def write_tweets_to_tweet_file(self,searched_tweets):
+		"""
+			Writes a set of tweets to the tweets file
+		"""
+		with open(self.BOT_CONFIG["LOGGED_TWEETS_FILE"], "a") as out_file:
+			for tweet in searched_tweets:
+				out_file.write("%s ] %s\n" % (time.ctime(), tweet["text"].encode("utf-8")))
 
 	def send_tweet(self, message):
 		"""

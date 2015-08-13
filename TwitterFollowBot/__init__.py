@@ -77,6 +77,16 @@ class TwitterBot:
 				follows_list.append(int(line))
 		return follows_list
 		
+	def get_user_blacklist_from_disk(self):
+		"""
+			Returns the set of blacklisted users, from disk cache.
+		"""
+		blacklisted_users = []
+		with open(self.BOT_CONFIG["USER_BLACKLIST_FILE"], "r") as in_file:
+			for line in in_file:
+				blacklisted_users.append(int(line))
+		return blacklisted_users
+		
 	def get_last_sync_from_disk(self):
 		"""
 			Returns the last sync time, in unix seconds, from disk cache.
@@ -124,7 +134,7 @@ class TwitterBot:
 		required_parameters = ["OAUTH_TOKEN", "OAUTH_SECRET", "CONSUMER_KEY",
 							   "CONSUMER_SECRET", "TWITTER_HANDLE",
 							   "ALREADY_FOLLOWED_FILE","FOLLOWS_FILE", "SEEN_TWEETS_FILE",
-							   "LAST_SYNC_FILE","LOGGED_TWEETS_FILE"]
+							   "LAST_SYNC_FILE","LOGGED_TWEETS_FILE", "USER_BLACKLIST_FILE"]
 
 		missing_parameters = []
 
@@ -144,7 +154,8 @@ class TwitterBot:
 						  self.BOT_CONFIG["FOLLOWS_FILE"],
 						  self.BOT_CONFIG["SEEN_TWEETS_FILE"],
 						  self.BOT_CONFIG["LAST_SYNC_FILE"],
-						  self.BOT_CONFIG["LOGGED_TWEETS_FILE"]]:
+						  self.BOT_CONFIG["LOGGED_TWEETS_FILE"],
+						  self.BOT_CONFIG["USER_BLACKLIST_FILE"]]:
 			if not os.path.isfile(sync_file):
 				with open(sync_file, "w") as out_file:
 					out_file.write("")
@@ -160,6 +171,7 @@ class TwitterBot:
 		self.follows = self.get_follows_list_from_disk()
 		self.seen_tweets = self.get_seen_tweets_list_from_disk()
 		self.last_sync = self.get_last_sync_from_disk()
+		self.user_blacklist = self.get_user_blacklist_from_disk()
 
 		# create an authorized connection to the Twitter API
 		self.TWITTER_CONNECTION = Twitter(auth=OAuth(self.BOT_CONFIG["OAUTH_TOKEN"],
@@ -262,6 +274,12 @@ class TwitterBot:
 			Sets the last sync time
 		"""
 		return self.last_sync
+	
+	def get_user_blacklist(self):
+		"""
+			Sets the last sync time
+		"""
+		return self.user_blacklist
 		
 	def set_last_sync(self, syncTime):
 		"""
@@ -413,10 +431,10 @@ class TwitterBot:
 		"""
 		origLen = len(searched_tweets)
 		for phrase in exclude_list:
-			exclude_tweets = [tweet for tweet in searched_tweets if (phrase in tweet["text"])]
+			exclude_tweets = [tweet for tweet in searched_tweets if (phrase in tweet["text"].lower())]
 			if len(exclude_tweets) > 0:
 				self.write_tweets_to_tweet_file(exclude_tweets)
-			searched_tweets = [tweet for tweet in searched_tweets if not (phrase in tweet["text"])]
+			searched_tweets = [tweet for tweet in searched_tweets if not (phrase in tweet["text"].lower())]
 			numRemoved = origLen - len(searched_tweets)
 			if numRemoved > 0:
 				print("  Removed %d tweets with the phrase %s in them" % (numRemoved, phrase))
@@ -436,7 +454,7 @@ class TwitterBot:
 		
 	def filter_only_tweets_containing(self,searched_tweets,include_list):
 		"""
-			Filters out tweets containing certain phrases from a 
+			Filters and returns only tweets containing certain phrases
 		"""
 		origLen = len(searched_tweets)
 		for phrase in include_list:
@@ -446,6 +464,18 @@ class TwitterBot:
 				print("Retained %d out of %d tweets with the phrase %s in them" % (numRetained,origLen,phrase))
 				origLen = len(searched_tweets)
 		return searched_tweets
+		
+	def filter_out_tweets_from_blacklisted_users(self,searched_tweets):
+		"""
+			Filters out tweets from blacklisted users
+		"""
+		origLen = len(searched_tweets)
+		for user in self.get_user_blacklist_from_disk():
+			searched_tweets = [tweet for tweet in searched_tweets if not (tweet["user"]["id"] in self.get_user_blacklist())]
+		numRemoved = origLen - len(searched_tweets)
+		if numRemoved > 0:
+			print("  Removed %d tweets from blacklisted users" % (numRemoved))
+		return(searched_tweets)
 	
 	def write_tweets_to_tweet_file(self,searched_tweets):
 		"""

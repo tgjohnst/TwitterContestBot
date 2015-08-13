@@ -217,8 +217,17 @@ class TwitterBot:
 		with open(self.BOT_CONFIG["FOLLOWS_FILE"], "w") as out_file:
 			for follow in self.follows:
 				out_file.write("%s\n" % (follow))
-		with open(self.BOT_CONFIG["ALREADY_FOLLOWED_FILE"], "a") as out_file:
-			for follow in self.follows:
+		self.mark_follows_already_followed()
+				
+	def mark_follows_already_followed(self):
+		"""
+			Cleans up the already followed list to remove duplicate entries
+		"""
+		dnf = self.get_do_not_follow_list()
+		dnf = dnf + self.follows
+		uniques = list(set(dnf))
+		with open(self.BOT_CONFIG["ALREADY_FOLLOWED_FILE"], "w") as out_file:
+			for follow in uniques:
 				out_file.write("%s\n" % (follow))
 				
 	def sync_seen_tweets_to_disk(self):
@@ -237,7 +246,7 @@ class TwitterBot:
 		with open(self.BOT_CONFIG["ALREADY_FOLLOWED_FILE"], "r") as in_file:
 			for line in in_file:
 				dnf_list.append(int(line))
-		return set(dnf_list)
+		return dnf_list
 	
 	def get_follows_list(self):
 		"""

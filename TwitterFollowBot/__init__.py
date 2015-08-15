@@ -244,7 +244,7 @@ class TwitterBot:
 		"""
 		# sync the user's seen tweet IDs to disk
 		with open(self.BOT_CONFIG["LAST_SYNC_FILE"], "w") as out_file:
-			out_file.write(self.last_sync)
+			out_file.write(str(self.last_sync))
 
 	def get_do_not_follow_list(self):
 		"""
